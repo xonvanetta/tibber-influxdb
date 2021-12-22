@@ -72,7 +72,7 @@ type response struct {
 	} `json:"viewer"`
 }
 
-func scrape(ctx context.Context, token string, client *graphql.Client) (*response, error) {
+func scrape(ctx context.Context, token string, client *graphql.Client) (response, error) {
 	req := graphql.NewRequest(`
 {
   viewer {
@@ -135,10 +135,10 @@ func scrape(ctx context.Context, token string, client *graphql.Client) (*respons
 
 `)
 	req.Header.Set("Authorization", token)
-	response := &response{}
-	err := client.Run(ctx, req, response)
+	response := response{}
+	err := client.Run(ctx, req, &response)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get data from tibber: %s", err)
+		return response, fmt.Errorf("failed to get data from tibber: %s", err)
 	}
 	return response, nil
 }

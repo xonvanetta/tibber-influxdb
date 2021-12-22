@@ -104,7 +104,7 @@ func run(ctx context.Context, config *Config, graphqlClient *graphql.Client, inf
 	return nil
 }
 
-func updateInfluxdb(response *response, writeAPI api.WriteAPI) error {
+func updateInfluxdb(response response, writeAPI api.WriteAPI) error {
 	defer writeAPI.Flush()
 
 	for _, home := range response.Viewer.Homes {
