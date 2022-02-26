@@ -3,19 +3,18 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
+	influxdb "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api"
 	"github.com/influxdata/influxdb-client-go/v2/api/write"
-
-	"github.com/sirupsen/logrus"
-
-	influxdb "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/koding/multiconfig"
 	"github.com/machinebox/graphql"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/sirupsen/logrus"
 	"github.com/xonvanetta/shutdown/pkg/shutdown"
+	"github.com/xonvanetta/tibber-influxdb/pkg/metrics"
 )
 
 type Config struct {
@@ -35,7 +34,7 @@ type InfluxDBConfig struct {
 
 func main() {
 	config := &Config{
-		Port:     9501,
+		Port:     8080,
 		LogLevel: "info",
 		Interval: time.Hour,
 		Tibber: TibberConfig{
@@ -58,10 +57,13 @@ func main() {
 	}
 
 	influxdbClient := influxdb.NewClient(config.InfluxDB.Url, config.InfluxDB.Token)
-
 	ticker := time.NewTicker(config.Interval)
+	run := func() error {
+		return run(ctx, config, graphqlClient, influxdbClient)
+	}
+
 	go func() {
-		err := run(ctx, config, graphqlClient, influxdbClient)
+		err := metrics.Scrape(run)
 		if err != nil {
 			logrus.Errorf("failed to run: %s", err)
 		}
@@ -72,7 +74,7 @@ func main() {
 				return
 			case <-ticker.C:
 			}
-			err := run(ctx, config, graphqlClient, influxdbClient)
+			err := metrics.Scrape(run)
 			if err != nil {
 				logrus.Errorf("failed to run: %s", err)
 			}
@@ -80,11 +82,16 @@ func main() {
 	}()
 
 	go func() {
-		err := http.ListenAndServe(fmt.Sprintf(":%d", config.Port), http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			writer.WriteHeader(http.StatusOK)
+		err := http.ListenAndServe(fmt.Sprintf(":%d", config.Port), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/health":
+				w.WriteHeader(http.StatusOK)
+			case "/metrics":
+				promhttp.Handler().ServeHTTP(w, r)
+			}
 		}))
 		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("failed to start http server: %s", err)
+			logrus.Fatalf("failed to start http server: %s", err)
 		}
 	}()
 
@@ -92,35 +99,21 @@ func main() {
 }
 
 func run(ctx context.Context, config *Config, graphqlClient *graphql.Client, influxdbClient influxdb.Client) error {
-	logrus.Debug("running scrape")
 	response, err := scrape(ctx, config.Tibber.Token, graphqlClient)
 	if err != nil {
 		return fmt.Errorf("failed to scrape tibber: %w", err)
 	}
-	err = updateInfluxdb(response, influxdbClient.WriteAPI(config.InfluxDB.Org, config.InfluxDB.Bucket))
-	if err != nil {
-		return fmt.Errorf("failed to update influxdb: %w", err)
-	}
+
+	//Safe for reuse
+	writer := influxdbClient.WriteAPI(config.InfluxDB.Org, config.InfluxDB.Bucket)
+	defer writer.Flush()
+	updateInfluxdb(response, writer)
+
 	return nil
 }
 
-func updateInfluxdb(response response, writeAPI api.WriteAPI) error {
-	defer writeAPI.Flush()
-
+func updateInfluxdb(response response, writeAPI api.WriteAPI) {
 	for _, home := range response.Viewer.Homes {
-		writeAPI.WritePoint(write.NewPointWithMeasurement("home").
-			AddTag("home_id", home.ID).
-			AddTag("home_timezone", home.TimeZone).
-			AddTag("home_address_address1", home.Address.Address1).
-			AddTag("home_address_address2", home.Address.Address2).
-			AddTag("home_address_address3", home.Address.Address3).
-			AddTag("home_address_city", home.Address.City).
-			AddTag("home_address_postal_code", home.Address.PostalCode).
-			AddTag("home_address_country", home.Address.Country).
-			AddTag("home_address_latitude", home.Address.Latitude).
-			AddTag("home_address_longitude", home.Address.Longitude).
-			AddField("online", 1))
-
 		for _, node := range home.Consumption.Nodes {
 			if node.ConsumptionUnit != "kWh" {
 				logrus.Errorf("skipping consumption as unit is wrong")
@@ -129,6 +122,15 @@ func updateInfluxdb(response response, writeAPI api.WriteAPI) error {
 			writeAPI.WritePoint(write.NewPointWithMeasurement("consumption_nodes_wh").
 				SetTime(node.From).
 				AddTag("home_id", home.ID).
+				AddTag("home_timezone", home.TimeZone).
+				AddTag("home_address_address1", home.Address.Address1).
+				AddTag("home_address_address2", home.Address.Address2).
+				AddTag("home_address_address3", home.Address.Address3).
+				AddTag("home_address_city", home.Address.City).
+				AddTag("home_address_postal_code", home.Address.PostalCode).
+				AddTag("home_address_country", home.Address.Country).
+				AddTag("home_address_latitude", home.Address.Latitude).
+				AddTag("home_address_longitude", home.Address.Longitude).
 				AddTag("currency", node.Currency).
 				AddField("cost", node.Cost).
 				AddField("unit_price", node.UnitPrice).
@@ -141,6 +143,15 @@ func updateInfluxdb(response response, writeAPI api.WriteAPI) error {
 			writeAPI.WritePoint(write.NewPointWithMeasurement("price").
 				SetTime(entry.Time).
 				AddTag("home_id", home.ID).
+				AddTag("home_timezone", home.TimeZone).
+				AddTag("home_address_address1", home.Address.Address1).
+				AddTag("home_address_address2", home.Address.Address2).
+				AddTag("home_address_address3", home.Address.Address3).
+				AddTag("home_address_city", home.Address.City).
+				AddTag("home_address_postal_code", home.Address.PostalCode).
+				AddTag("home_address_country", home.Address.Country).
+				AddTag("home_address_latitude", home.Address.Latitude).
+				AddTag("home_address_longitude", home.Address.Longitude).
 				AddTag("currency", currency).
 				AddTag("level", entry.Level).
 				AddField("difference", entry.Difference).
@@ -149,5 +160,4 @@ func updateInfluxdb(response response, writeAPI api.WriteAPI) error {
 				AddField("total", entry.Total))
 		}
 	}
-	return nil
 }

@@ -9,7 +9,7 @@ build:
 	CGO_ENABLED=0 GOOS=linux go build ./cmd/tibber-influxdb
 
 docker: build
-	docker build --pull --rm -t $(IMAGE):$(TAG) .
+	docker build --pull --rm -t $(IMAGE):$(TAG) . -f build/Dockerfile
 	rm tibber-influxdb
 
 push: docker
@@ -18,7 +18,7 @@ push: docker
 all: build docker push
 
 run:
-	docker run -it --env-file .env --rm -p 9501:9501 -t $(IMAGE):$(TAG)
+	docker run -it --env-file .env --rm -p 8080:8080 -t $(IMAGE):$(TAG)
 
 test: fmt
 	go test ./...

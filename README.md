@@ -30,7 +30,7 @@ Usage of ./tibber-influxdb:
   -loglevel
     	Change value of LogLevel. (default info)
   -port
-    	Change value of Port. (default 9501)
+    	Change value of Port. (default 8080)
   -tibber-endpoint
     	Change value of Tibber-Endpoint. (default https://api.tibber.com/v1-beta/gql)
   -tibber-token
